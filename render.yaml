@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: port-scanner-api
+    env: docker
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: SCAN_API_KEY
+        generateValue: true
+      - key: PORT
+        value: 10000
+      - key: RATE_LIMIT_PER_MIN
+        value: 10
+      - key: NMAP_TIMEOUT
+        value: 25
+    healthCheckPath: /
