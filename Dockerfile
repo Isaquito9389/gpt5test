@@ -7,15 +7,15 @@ RUN apt-get update && apt-get install -y \
     --no-install-recommends && \
     rm -rf /var/lib/apt/lists/*
 
+# Crée le dossier de travail
+WORKDIR /app
+
 # Crée un utilisateur non-root
 RUN useradd -m appuser && \
     chown -R appuser:appuser /app
 
 # Change à l'utilisateur non-root
 USER appuser
-
-# Crée le dossier de travail
-WORKDIR /app
 
 # Copie les fichiers requirements et code
 COPY requirements.txt requirements.txt

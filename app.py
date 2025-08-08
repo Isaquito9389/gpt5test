@@ -2,11 +2,10 @@ import os
 import re
 import time
 import ipaddress
-import logging
 import subprocess
 import xml.etree.ElementTree as ET
 from threading import Lock
-from flask import Flask, request, jsonify, abort
+from flask import Flask, request, jsonify, render_template_string
 from flask import send_from_directory
 # Configuration
 API_KEY = os.environ.get("SCAN_API_KEY", "change-me")  # changez via env var en production
@@ -15,7 +14,6 @@ NMAP_TIMEOUT = int(os.environ.get("NMAP_TIMEOUT", "25"))  # secondes
 ALLOWED_PORT_RANGE_RE = re.compile(r"^\d+(-\d+)?(,\d+(-\d+)?)*$")  # optionnel: validation ports
 
 app = Flask(__name__)
-logging.basicConfig(level=logging.INFO)
 
 # in-memory rate limiting: api_key -> [timestamps_of_requests]
 _rate_lock = Lock()
@@ -119,12 +117,10 @@ def scan():
     except FileNotFoundError:
         return jsonify({"error": "nmap not installed on server"}), 503
     except Exception as e:
-        app.logger.exception("Error running nmap")
-        return jsonify({"error": "Internal error running nmap", "detail": str(e)}), 500
+        return jsonify({"error": "Internal error running nmap"}), 500
 
     if proc.returncode not in (0, 1):  # nmap returns 0 (no hosts down), 1 (hosts down) etc
-        # still try to parse output, but inform user
-        app.logger.warning("nmap returned non-zero exit code: %s", proc.returncode)
+        pass  # still try to parse output
 
     xml_out = proc.stdout
     if not xml_out:
@@ -147,73 +143,17 @@ def not_found(e):
 
 @app.route("/")
 def home():
-    api_key = os.environ.get("SCAN_API_KEY", "")
-    return f"""
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-<meta charset="UTF-8">
-<title>Port Scanner Pro</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>
-    body {{ font-family: Arial, sans-serif; margin: 20px; background: #f4f4f4; }}
-    h1 {{ text-align: center; }}
-    .card {{ background: white; padding: 20px; border-radius: 8px; max-width: 500px; margin: auto; box-shadow: 0 2px 10px rgba(0,0,0,0.1);}}
-    label {{ display: block; margin-top: 15px; }}
-    input, button {{ width: 100%; padding: 10px; margin-top: 5px; }}
-    button {{ background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }}
-    button:hover {{ background: #0056b3; }}
-    pre {{ background: #272822; color: #f8f8f2; padding: 10px; border-radius: 4px; overflow-x: auto; }}
-</style>
-</head>
-<body>
-    <h1>Port Scanner</h1>
-    <div class="card">
-        <label for="host">Adresse IP ou nom d'hôte :</label>
-        <input type="text" id="host" placeholder="Ex: 192.168.1.1 ou example.com">
-        <label for="ports">Ports (optionnel) :</label>
-        <input type="text" id="ports" placeholder="Ex: 80,443 ou 1-1024">
-        <button onclick="scan()">Scanner</button>
-        <div id="result"></div>
-    </div>
-    <script src="config.js"></script>
-    <script>
-        // Injecter la clé API depuis le backend
-        window.API_CONFIG.API_KEY = "{api_key}";
-        async function scan() {{
-            const host = document.getElementById('host').value.trim();
-            const ports = document.getElementById('ports').value.trim();
-            if (!host) {{
-                alert('Veuillez entrer une adresse IP ou un nom d\'hôte');
-                return;
-            }}
-            const resultDiv = document.getElementById('result');
-            resultDiv.innerHTML = '<p>Scanning...</p>';
-            try {{
-                const response = await fetch(window.API_CONFIG.API_URL, {{
-                    method: 'POST',
-                    headers: {{
-                        'Content-Type': 'application/json',
-                        'X-API-Key': window.API_CONFIG.API_KEY
-                    }},
-                    body: JSON.stringify({{
-                        host,
-                        ports: ports || null
-                    }})
-                }});
-                if (!response.ok) {{
-                    throw new Error('Erreur lors du scan');
-                }}
-                const data = await response.json();
-                resultDiv.innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
-            }} catch (error) {{
-                resultDiv.innerHTML = `<p style="color: red;">Erreur: ${error.message}</p>`;
-            }}
-        }}
-    </script>
-</body>
-</html>
-    """
+    return send_from_directory("static", "index.html")
+
+@app.route("/static/config.js")
+def config_js():
+    api_key = os.environ.get("SCAN_API_KEY", "change-me")
+    config_content = f"""// Configuration dynamique pour l'API
+window.API_CONFIG = {{
+    API_KEY: "{api_key}",
+    API_URL: window.location.origin + "/scan"
+}};"""
+    return config_content, 200, {'Content-Type': 'application/javascript'}
 
 @app.route("/static/<path:filename>")
 def static_files(filename):
