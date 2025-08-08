@@ -104,8 +104,12 @@ def scan():
         return jsonify({"error": "Invalid host/ip format"}), 400
 
     # optional validation of ports format (simple)
-    if ports_spec and not ALLOWED_PORT_RANGE_RE.match(str(ports_spec)):
+    if ports_spec and ports_spec.strip() and not ALLOWED_PORT_RANGE_RE.match(str(ports_spec).strip()):
         return jsonify({"error": "Invalid ports format. Example: '1-1024' or '22,80,443'"}), 400
+    
+    # Si ports_spec est vide ou None, utiliser la valeur par défaut
+    if not ports_spec or not ports_spec.strip():
+        ports_spec = "1-1024"
 
     # Build nmap command
     cmd = ["nmap", "-Pn", "-p", str(ports_spec), "--open", "-oX", "-", host]
@@ -162,6 +166,15 @@ def static_files(filename):
 @app.route("/health", methods=["GET"])
 def health_check():
     return jsonify({"status": "ok", "service": "Port Scanner API"}), 200
+
+@app.route("/debug", methods=["GET"])
+def debug_info():
+    return jsonify({
+        "api_key_configured": bool(os.environ.get("SCAN_API_KEY")),
+        "api_key_length": len(os.environ.get("SCAN_API_KEY", "")),
+        "rate_limit": RATE_LIMIT_PER_MIN,
+        "timeout": NMAP_TIMEOUT
+    }), 200
 
 @app.errorhandler(500)
 def server_err(e):

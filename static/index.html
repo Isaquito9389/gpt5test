@@ -85,6 +85,7 @@
         <input type="text" id="ports" placeholder="Ex: 1-1024 ou 22,80,443" value="1-1024">
 
         <button onclick="scan()">Lancer le scan</button>
+        <button onclick="testConfig()" style="background: #6c757d; margin-top: 10px;">Test Configuration</button>
 
         <h3>Résultat :</h3>
         <pre id="result">En attente...</pre>
@@ -102,23 +103,45 @@
 
             document.getElementById("result").textContent = "Scan en cours...";
             try {
+                const requestBody = { ip: ip };
+                if (ports) {
+                    requestBody.ports = ports;
+                }
+
+                console.log("Sending request:", requestBody);
+                console.log("API Key length:", window.API_CONFIG.API_KEY.length);
+
                 const res = await fetch(window.API_CONFIG.API_URL, {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json",
                         "X-API-KEY": window.API_CONFIG.API_KEY
                     },
-                    body: JSON.stringify({ ip: ip, ports: ports })
+                    body: JSON.stringify(requestBody)
                 });
 
                 if (!res.ok) {
-                    throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+                    const errorData = await res.json().catch(() => ({ error: "Unknown error" }));
+                    throw new Error(`HTTP ${res.status}: ${errorData.error || res.statusText}`);
                 }
 
                 const data = await res.json();
                 document.getElementById("result").textContent = JSON.stringify(data, null, 2);
             } catch (err) {
                 document.getElementById("result").textContent = "Erreur: " + err.message;
+                console.error("Scan error:", err);
+            }
+        }
+
+        async function testConfig() {
+            document.getElementById("result").textContent = "Test de configuration...";
+            try {
+                const res = await fetch("/debug");
+                const data = await res.json();
+                document.getElementById("result").textContent = "Configuration:\n" + JSON.stringify(data, null, 2) + 
+                    "\n\nAPI Key (frontend): " + (window.API_CONFIG.API_KEY ? "Configurée (" + window.API_CONFIG.API_KEY.length + " chars)" : "Non configurée");
+            } catch (err) {
+                document.getElementById("result").textContent = "Erreur test config: " + err.message;
             }
         }
     </script>
