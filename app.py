@@ -200,50 +200,68 @@ def is_cloudflare_ip(ip):
         pass
     return False
 
-def build_nmap_command(target_ip, ports_spec, scan_level):
+def build_nmap_command(target_ip, ports_spec, scan_level, is_behind_cdn=False):
     """Construit la commande nmap selon le niveau de scan"""
     base_cmd = ["nmap"]
     
     if scan_level == "basic":
-        # Scan basique rapide
+        # Scan basique rapide - compatible CDN
         cmd = base_cmd + ["-Pn", "-p", str(ports_spec), "--open", "-oX", "-", target_ip]
     
     elif scan_level == "advanced":
-        # Scan avancé avec détection de services
-        cmd = base_cmd + [
-            "-Pn", "-sS", "-sV", "-O", 
-            "-p", str(ports_spec), 
-            "--open", "--version-intensity", "5",
-            "-oX", "-", target_ip
-        ]
+        # Scan avancé - adapté pour CDN
+        if is_behind_cdn:
+            # Pour les CDN, utiliser un scan TCP connect plus compatible
+            cmd = base_cmd + [
+                "-Pn", "-sT", "-sV",  # TCP connect au lieu de SYN
+                "-p", str(ports_spec), 
+                "--open", "--version-intensity", "3",  # Moins agressif
+                "-T3",  # Timing normal
+                "-oX", "-", target_ip
+            ]
+        else:
+            # Pour les serveurs normaux
+            cmd = base_cmd + [
+                "-Pn", "-sS", "-sV", "-O", 
+                "-p", str(ports_spec), 
+                "--open", "--version-intensity", "5",
+                "-oX", "-", target_ip
+            ]
     
     elif scan_level == "expert":
-        # Scan expert avec évasion et scripts
-        cmd = base_cmd + [
-            "-Pn", "-sS", "-sV", "-sC", "-O",
-            "-p", str(ports_spec),
-            "--open", "--version-intensity", "9",
-            "--script", "default,discovery,vuln",
-            "-T4", "--min-rate", "1000",
-            "--max-retries", "3",
-            "-f",  # Fragment packets
-            "--source-port", "53",  # Use DNS port as source
-            "--data-length", "25",  # Add random data
-            "-oX", "-", target_ip
-        ]
+        # Scan expert avec techniques d'évasion
+        if is_behind_cdn:
+            # Techniques spéciales pour CDN
+            cmd = base_cmd + [
+                "-Pn", "-sT", "-sV", "-sC",  # TCP connect + scripts
+                "-p", str(ports_spec),
+                "--open", "--version-intensity", "7",
+                "--script", "http-methods,http-headers,ssl-cert,ssl-enum-ciphers",
+                "-T3", "--max-retries", "2",
+                "--source-port", "80",  # Port source HTTP
+                "-oX", "-", target_ip
+            ]
+        else:
+            # Scan complet pour serveurs normaux
+            cmd = base_cmd + [
+                "-Pn", "-sS", "-sV", "-sC", "-O",
+                "-p", str(ports_spec),
+                "--open", "--version-intensity", "9",
+                "--script", "default,discovery,vuln",
+                "-T4", "--min-rate", "500",
+                "--max-retries", "3",
+                "-oX", "-", target_ip
+            ]
     
     elif scan_level == "stealth":
-        # Scan furtif pour éviter la détection
+        # Scan furtif - très discret
         cmd = base_cmd + [
-            "-Pn", "-sS", "-sV",
+            "-Pn", "-sT", "-sV",  # TCP connect pour éviter la détection
             "-p", str(ports_spec),
-            "--open", "-T2",  # Timing très lent
-            "--scan-delay", "2s",
-            "--max-rate", "10",
-            "-f", "-f",  # Double fragmentation
-            "--mtu", "16",
-            "--source-port", "53",
-            "--spoof-mac", "0",
+            "--open", "-T1",  # Timing très lent
+            "--scan-delay", "3s",
+            "--max-rate", "5",
+            "--source-port", "53",  # Port DNS
             "-oX", "-", target_ip
         ]
     
@@ -374,8 +392,11 @@ def scan():
     if scan_level in ["expert", "stealth"]:
         real_ips = get_real_ip_behind_cdn(resolved_host)
     
-    # Build nmap command selon le niveau
-    cmd = build_nmap_command(target_ip, ports_spec, scan_level)
+    # Vérifier si c'est derrière un CDN
+    is_cdn = is_cloudflare_ip(target_ip)
+    
+    # Build nmap command selon le niveau et le type de cible
+    cmd = build_nmap_command(target_ip, ports_spec, scan_level, is_cdn)
 
     # Ajuster le timeout selon le niveau de scan
     timeout = NMAP_TIMEOUT
@@ -395,15 +416,24 @@ def scan():
     except Exception as e:
         return jsonify({"error": "Internal error running nmap"}), 500
 
-    if proc.returncode not in (0, 1):  # nmap returns 0 (no hosts down), 1 (hosts down) etc
-        pass  # still try to parse output
-
     xml_out = proc.stdout
     if not xml_out:
-        # sometimes nmap outputs to stderr
         xml_out = proc.stderr or b""
 
     open_ports, host_info = parse_nmap_xml(xml_out)
+    
+    # Si aucun port trouvé avec scan avancé et que c'est un CDN, essayer un scan basique
+    if not open_ports and scan_level != "basic" and is_cdn:
+        try:
+            fallback_cmd = build_nmap_command(target_ip, ports_spec, "basic", is_cdn)
+            fallback_proc = subprocess.run(fallback_cmd, capture_output=True, timeout=30)
+            if fallback_proc.stdout:
+                fallback_ports, _ = parse_nmap_xml(fallback_proc.stdout)
+                if fallback_ports:
+                    open_ports = fallback_ports
+                    host_info["fallback_used"] = True
+        except:
+            pass
 
     response = {
         "original_host": host,

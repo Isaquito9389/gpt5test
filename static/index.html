@@ -123,6 +123,9 @@
             
             if (data.is_behind_cdn) {
                 output += `☁️ CDN détecté: Cloudflare/CDN (IP masquée)\n`;
+                if (data.host_info && data.host_info.fallback_used) {
+                    output += `🔄 Scan de fallback utilisé pour contourner les protections CDN\n`;
+                }
             }
             
             output += "\n";
