@@ -79,12 +79,16 @@
             Render
         </div>
         <label>Hôte / IP :</label>
-        <input type="text" id="ip" placeholder="Ex: 8.8.8.8 ou example.com">
+        <input type="text" id="ip" placeholder="Ex: google.com, www.github.com, https://example.com, 8.8.8.8">
+        <small style="color: #666; font-size: 12px;">
+            ℹ️ Supporte les domaines avec/sans www, suit les redirections automatiquement
+        </small>
 
         <label>Plage de ports :</label>
         <input type="text" id="ports" placeholder="Ex: 1-1024 ou 22,80,443" value="1-1024">
 
         <button onclick="scan()">Lancer le scan</button>
+        <button onclick="testResolve()" style="background: #17a2b8; margin-top: 10px;">Test Résolution DNS</button>
         <button onclick="testConfig()" style="background: #6c757d; margin-top: 10px;">Test Configuration</button>
 
         <h3>Résultat :</h3>
@@ -130,6 +134,30 @@
             } catch (err) {
                 document.getElementById("result").textContent = "Erreur: " + err.message;
                 console.error("Scan error:", err);
+            }
+        }
+
+        async function testResolve() {
+            const ip = document.getElementById("ip").value.trim();
+            if (!ip) {
+                alert("Veuillez entrer un hôte pour tester la résolution");
+                return;
+            }
+
+            document.getElementById("result").textContent = "Test de résolution DNS...";
+            try {
+                const res = await fetch("/resolve", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({ host: ip })
+                });
+
+                const data = await res.json();
+                document.getElementById("result").textContent = "Résolution DNS:\n" + JSON.stringify(data, null, 2);
+            } catch (err) {
+                document.getElementById("result").textContent = "Erreur résolution: " + err.message;
             }
         }
 

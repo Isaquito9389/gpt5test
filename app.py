@@ -4,6 +4,9 @@ import time
 import ipaddress
 import subprocess
 import xml.etree.ElementTree as ET
+import socket
+import urllib.request
+import urllib.parse
 from threading import Lock
 from flask import Flask, request, jsonify, render_template_string
 from flask import send_from_directory
@@ -33,20 +36,102 @@ def check_rate_limit(key):
         _rate_store[key] = timestamps
     return True
 
-def validate_host(host):
-    # Accept IPv4, IPv6 or hostname (basic)
+def normalize_host(host):
+    """Normalise un nom d'hôte en retirant les protocoles et www optionnels"""
+    if not host:
+        return None
+    
+    # Retirer les protocoles
+    host = re.sub(r'^https?://', '', host.lower().strip())
+    # Retirer les chemins
+    host = host.split('/')[0]
+    # Retirer les ports s'ils sont spécifiés
+    host = host.split(':')[0]
+    
+    return host
+
+def resolve_host_with_redirects(host):
+    """Résout un nom d'hôte en suivant les redirections et retourne l'IP finale"""
     try:
-        # if it's an IP this will validate
-        ipaddress.ip_address(host)
-        return True
+        # D'abord, essayer de résoudre directement si c'est déjà une IP
+        try:
+            ipaddress.ip_address(host)
+            return host, host  # C'est déjà une IP
+        except:
+            pass
+        
+        # Normaliser le host
+        normalized = normalize_host(host)
+        if not normalized:
+            return None, None
+            
+        # Essayer différentes variantes du domaine
+        variants = [normalized]
+        
+        # Si pas de www, ajouter www
+        if not normalized.startswith('www.'):
+            variants.append(f'www.{normalized}')
+        # Si www présent, essayer sans
+        elif normalized.startswith('www.'):
+            variants.append(normalized[4:])
+        
+        final_host = None
+        final_ip = None
+        
+        # Tester chaque variante
+        for variant in variants:
+            try:
+                # Essayer de suivre les redirections HTTP
+                for protocol in ['https', 'http']:
+                    try:
+                        url = f'{protocol}://{variant}'
+                        req = urllib.request.Request(url, method='HEAD')
+                        req.add_header('User-Agent', 'Port-Scanner/1.0')
+                        
+                        with urllib.request.urlopen(req, timeout=5) as response:
+                            # Récupérer l'URL finale après redirections
+                            final_url = response.url
+                            final_host = urllib.parse.urlparse(final_url).netloc
+                            break
+                    except:
+                        continue
+                
+                # Si on a trouvé un host final, résoudre son IP
+                if final_host:
+                    try:
+                        final_ip = socket.gethostbyname(final_host)
+                        return final_host, final_ip
+                    except:
+                        continue
+                        
+                # Sinon essayer de résoudre directement la variante
+                try:
+                    resolved_ip = socket.gethostbyname(variant)
+                    return variant, resolved_ip
+                except:
+                    continue
+                    
+            except:
+                continue
+        
+        # Si aucune variante ne fonctionne, essayer une résolution DNS simple
+        try:
+            ip = socket.gethostbyname(normalized)
+            return normalized, ip
+        except:
+            return None, None
+            
     except Exception:
-        # hostname basic sanity check (no spaces, reasonable chars)
-        if len(host) > 255:
-            return False
-        if host.endswith("."):
-            host = host[:-1]
-        allowed = re.compile(r"^(?=.{1,255}$)[0-9A-Za-z](?:[0-9A-Za-z\-]{0,61}[0-9A-Za-z])?(?:\.[0-9A-Za-z](?:[0-9A-Za-z\-]{0,61}[0-9A-Za-z])?)*$")
-        return bool(allowed.match(host))
+        return None, None
+
+def validate_host(host):
+    """Valide et résout un nom d'hôte"""
+    if not host:
+        return False
+    
+    # Essayer de résoudre avec redirections
+    resolved_host, resolved_ip = resolve_host_with_redirects(host)
+    return resolved_host is not None and resolved_ip is not None
 
 def parse_nmap_xml(xml_bytes):
     # returns list of dicts: {"port": int, "protocol": "tcp", "service": "ssh"}
@@ -100,8 +185,11 @@ def scan():
     if not host:
         return jsonify({"error": "Missing 'ip' (or 'host') in JSON body"}), 400
 
-    if not validate_host(host):
-        return jsonify({"error": "Invalid host/ip format"}), 400
+    # Résoudre l'hôte avec gestion des redirections
+    resolved_host, target_ip = resolve_host_with_redirects(host)
+    
+    if not resolved_host or not target_ip:
+        return jsonify({"error": f"Unable to resolve host: {host}"}), 400
 
     # optional validation of ports format (simple)
     if ports_spec and ports_spec.strip() and not ALLOWED_PORT_RANGE_RE.match(str(ports_spec).strip()):
@@ -111,8 +199,8 @@ def scan():
     if not ports_spec or not ports_spec.strip():
         ports_spec = "1-1024"
 
-    # Build nmap command
-    cmd = ["nmap", "-Pn", "-p", str(ports_spec), "--open", "-oX", "-", host]
+    # Build nmap command - utiliser l'IP résolue pour le scan
+    cmd = ["nmap", "-Pn", "-p", str(ports_spec), "--open", "-oX", "-", target_ip]
 
     try:
         proc = subprocess.run(cmd, capture_output=True, timeout=NMAP_TIMEOUT)
@@ -134,7 +222,9 @@ def scan():
     open_ports = parse_nmap_xml(xml_out)
 
     response = {
-        "host": host,
+        "original_host": host,
+        "resolved_host": resolved_host,
+        "target_ip": target_ip,
         "open_ports": open_ports,
         "scanned_ports": str(ports_spec),
         "nmap_exit_code": proc.returncode
@@ -174,6 +264,27 @@ def debug_info():
         "api_key_length": len(os.environ.get("SCAN_API_KEY", "")),
         "rate_limit": RATE_LIMIT_PER_MIN,
         "timeout": NMAP_TIMEOUT
+    }), 200
+
+@app.route("/resolve", methods=["POST"])
+def test_resolve():
+    """Test de résolution DNS avec redirections"""
+    if not request.is_json:
+        return jsonify({"error": "JSON body required"}), 400
+    
+    data = request.get_json()
+    host = data.get("host")
+    
+    if not host:
+        return jsonify({"error": "Missing 'host' in JSON body"}), 400
+    
+    resolved_host, target_ip = resolve_host_with_redirects(host)
+    
+    return jsonify({
+        "original_host": host,
+        "resolved_host": resolved_host,
+        "target_ip": target_ip,
+        "success": resolved_host is not None
     }), 200
 
 @app.errorhandler(500)
