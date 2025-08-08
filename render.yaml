@@ -13,3 +13,4 @@ services:
       - key: NMAP_TIMEOUT
         value: 25
     healthCheckPath: /health
+    version: 1.0.0
