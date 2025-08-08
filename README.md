@@ -4,7 +4,7 @@ Une API REST pour scanner les ports ouverts d'un hôte en utilisant nmap.
 
 ## Déploiement sur Render
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Isaquito9389/port-scanner-api)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Isaquito9389/gpt5test)
 
 ## Configuration
 
@@ -12,6 +12,44 @@ Variables d'environnement :
 - `SCAN_API_KEY` : Clé API pour authentification (générée automatiquement sur Render)
 - `RATE_LIMIT_PER_MIN` : Limite de requêtes par minute (défaut: 10)
 - `NMAP_TIMEOUT` : Timeout pour nmap en secondes (défaut: 25)
+
+## Installation locale
+
+1. Clonez le dépôt :
+```bash
+git clone https://github.com/Isaquito9389/gpt5test.git
+```
+
+2. Créez un fichier `.env` :
+```bash
+touch .env
+```
+
+3. Ajoutez vos variables d'environnement dans `.env` :
+```
+SCAN_API_KEY=votre_clé_api
+RATE_LIMIT_PER_MIN=10
+NMAP_TIMEOUT=25
+```
+
+4. Installez les dépendances :
+```bash
+pip install -r requirements.txt
+```
+
+5. Lancez l'application :
+```bash
+python app.py
+```
+
+## Déploiement sur Render
+
+1. Créez un compte sur [Render](https://render.com)
+2. Cliquez sur le bouton "Deploy to Render" ci-dessus
+3. Configurez les variables d'environnement :
+   - `SCAN_API_KEY` : Laissez "Generate value"
+   - `RATE_LIMIT_PER_MIN` : Optionnel (défaut: 10)
+   - `NMAP_TIMEOUT` : Optionnel (défaut: 25)
 
 ## Utilisation
 
