@@ -15,12 +15,20 @@ Variables d'environnement :
 
 ## Utilisation
 
+### Interface Web
+Accédez directement à votre application déployée pour utiliser l'interface graphique.
+
+### API REST
 ```bash
 curl -X POST https://votre-app.onrender.com/scan \
   -H "Content-Type: application/json" \
   -H "X-API-KEY: votre-cle-api" \
   -d '{"host": "example.com", "ports": "1-1024"}'
 ```
+
+### Configuration post-déploiement
+1. Récupérez votre clé API depuis les variables d'environnement Render
+2. Modifiez la variable `API_KEY` dans `static/index.html` ligne 45
 
 ## Réponse
 

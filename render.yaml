@@ -12,4 +12,4 @@ services:
         value: 10
       - key: NMAP_TIMEOUT
         value: 25
-    healthCheckPath: /
+    healthCheckPath: /health

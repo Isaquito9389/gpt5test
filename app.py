@@ -7,7 +7,7 @@ import subprocess
 import xml.etree.ElementTree as ET
 from threading import Lock
 from flask import Flask, request, jsonify, abort
-
+from flask import send_from_directory
 # Configuration
 API_KEY = os.environ.get("SCAN_API_KEY", "change-me")  # changez via env var en production
 RATE_LIMIT_PER_MIN = int(os.environ.get("RATE_LIMIT_PER_MIN", "10"))  # requêtes/min par clé
@@ -145,14 +145,21 @@ def scan():
 def not_found(e):
     return jsonify({"error": "Endpoint not found"}), 404
 
-@app.route("/", methods=["GET"])
+@app.route("/")
+def home():
+    return send_from_directory("static", "index.html")
+
+@app.route("/static/<path:filename>")
+def static_files(filename):
+    return send_from_directory("static", filename)
+
+@app.route("/health", methods=["GET"])
 def health_check():
     return jsonify({"status": "ok", "service": "Port Scanner API"}), 200
 
 @app.errorhandler(500)
 def server_err(e):
     return jsonify({"error": "Internal server error"}), 500
-
 if __name__ == "__main__":
     # production: use gunicorn/uvicorn, not flask builtin server
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
