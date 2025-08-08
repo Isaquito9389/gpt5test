@@ -133,31 +133,198 @@ def validate_host(host):
     resolved_host, resolved_ip = resolve_host_with_redirects(host)
     return resolved_host is not None and resolved_ip is not None
 
+def get_real_ip_behind_cdn(domain):
+    """Techniques pour trouver la vraie IP derrière Cloudflare/CDN"""
+    real_ips = []
+    
+    try:
+        # 1. Recherche de sous-domaines non protégés
+        subdomains = ['mail', 'ftp', 'cpanel', 'webmail', 'direct', 'origin', 'admin', 'dev', 'staging']
+        for sub in subdomains:
+            try:
+                subdomain = f"{sub}.{domain}"
+                ip = socket.gethostbyname(subdomain)
+                # Vérifier si ce n'est pas une IP Cloudflare
+                if not is_cloudflare_ip(ip):
+                    real_ips.append({"method": f"subdomain_{sub}", "ip": ip, "host": subdomain})
+            except:
+                continue
+        
+        # 2. Recherche DNS historique (simulation)
+        try:
+            # Technique: essayer des enregistrements MX
+            import subprocess
+            result = subprocess.run(['nslookup', '-type=MX', domain], 
+                                  capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                # Parser les résultats MX pour trouver des IPs
+                lines = result.stdout.split('\n')
+                for line in lines:
+                    if 'mail exchanger' in line.lower():
+                        parts = line.split()
+                        if len(parts) > 3:
+                            mx_host = parts[-1].rstrip('.')
+                            try:
+                                mx_ip = socket.gethostbyname(mx_host)
+                                if not is_cloudflare_ip(mx_ip):
+                                    real_ips.append({"method": "mx_record", "ip": mx_ip, "host": mx_host})
+                            except:
+                                continue
+        except:
+            pass
+            
+        # 3. Technique de scan de plages IP connues
+        # (Simulation - en production, utiliser des bases de données spécialisées)
+        
+    except Exception:
+        pass
+    
+    return real_ips
+
+def is_cloudflare_ip(ip):
+    """Vérifie si une IP appartient à Cloudflare"""
+    cloudflare_ranges = [
+        '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22',
+        '103.31.4.0/22', '141.101.64.0/18', '108.162.192.0/18',
+        '190.93.240.0/20', '188.114.96.0/20', '197.234.240.0/22',
+        '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13',
+        '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22'
+    ]
+    
+    try:
+        ip_obj = ipaddress.ip_address(ip)
+        for range_str in cloudflare_ranges:
+            if ip_obj in ipaddress.ip_network(range_str):
+                return True
+    except:
+        pass
+    return False
+
+def build_nmap_command(target_ip, ports_spec, scan_level):
+    """Construit la commande nmap selon le niveau de scan"""
+    base_cmd = ["nmap"]
+    
+    if scan_level == "basic":
+        # Scan basique rapide
+        cmd = base_cmd + ["-Pn", "-p", str(ports_spec), "--open", "-oX", "-", target_ip]
+    
+    elif scan_level == "advanced":
+        # Scan avancé avec détection de services
+        cmd = base_cmd + [
+            "-Pn", "-sS", "-sV", "-O", 
+            "-p", str(ports_spec), 
+            "--open", "--version-intensity", "5",
+            "-oX", "-", target_ip
+        ]
+    
+    elif scan_level == "expert":
+        # Scan expert avec évasion et scripts
+        cmd = base_cmd + [
+            "-Pn", "-sS", "-sV", "-sC", "-O",
+            "-p", str(ports_spec),
+            "--open", "--version-intensity", "9",
+            "--script", "default,discovery,vuln",
+            "-T4", "--min-rate", "1000",
+            "--max-retries", "3",
+            "-f",  # Fragment packets
+            "--source-port", "53",  # Use DNS port as source
+            "--data-length", "25",  # Add random data
+            "-oX", "-", target_ip
+        ]
+    
+    elif scan_level == "stealth":
+        # Scan furtif pour éviter la détection
+        cmd = base_cmd + [
+            "-Pn", "-sS", "-sV",
+            "-p", str(ports_spec),
+            "--open", "-T2",  # Timing très lent
+            "--scan-delay", "2s",
+            "--max-rate", "10",
+            "-f", "-f",  # Double fragmentation
+            "--mtu", "16",
+            "--source-port", "53",
+            "--spoof-mac", "0",
+            "-oX", "-", target_ip
+        ]
+    
+    else:
+        # Par défaut: basic
+        cmd = base_cmd + ["-Pn", "-p", str(ports_spec), "--open", "-oX", "-", target_ip]
+    
+    return cmd
+
 def parse_nmap_xml(xml_bytes):
-    # returns list of dicts: {"port": int, "protocol": "tcp", "service": "ssh"}
+    """Parse XML nmap avec informations détaillées"""
     try:
         root = ET.fromstring(xml_bytes)
     except ET.ParseError:
-        return []
+        return [], {}
+    
     ports = []
+    host_info = {}
+    
     for host in root.findall("host"):
+        # Informations sur l'hôte
+        status = host.find("status")
+        if status is not None:
+            host_info["status"] = status.get("state")
+        
+        # OS Detection
+        os_elem = host.find("os")
+        if os_elem is not None:
+            osmatch = os_elem.find("osmatch")
+            if osmatch is not None:
+                host_info["os"] = {
+                    "name": osmatch.get("name"),
+                    "accuracy": osmatch.get("accuracy")
+                }
+        
+        # Ports
         ports_elem = host.find("ports")
         if ports_elem is None:
             continue
+            
         for p in ports_elem.findall("port"):
             state = p.find("state")
             if state is None or state.get("state") != "open":
                 continue
+                
             portid = p.get("portid")
             proto = p.get("protocol")
+            
+            # Service detection
             svc = p.find("service")
-            svcname = svc.get("name") if svc is not None and svc.get("name") else None
+            service_info = {}
+            if svc is not None:
+                service_info = {
+                    "name": svc.get("name"),
+                    "product": svc.get("product"),
+                    "version": svc.get("version"),
+                    "extrainfo": svc.get("extrainfo")
+                }
+            
+            # Scripts results
+            scripts = []
+            for script in p.findall("script"):
+                scripts.append({
+                    "id": script.get("id"),
+                    "output": script.get("output")
+                })
+            
             try:
                 portnum = int(portid)
             except Exception:
                 continue
-            ports.append({"port": portnum, "protocol": proto, "service": svcname})
-    return ports
+                
+            port_data = {
+                "port": portnum,
+                "protocol": proto,
+                "service": service_info,
+                "scripts": scripts
+            }
+            ports.append(port_data)
+    
+    return ports, host_info
 
 @app.route("/scan", methods=["POST"])
 def scan():
@@ -198,14 +365,31 @@ def scan():
     # Si ports_spec est vide ou None, utiliser la valeur par défaut
     if not ports_spec or not ports_spec.strip():
         ports_spec = "1-1024"
+    
+    # Niveau de scan
+    scan_level = data.get("scan_level", "basic")
+    
+    # Recherche de la vraie IP derrière CDN pour les scans avancés
+    real_ips = []
+    if scan_level in ["expert", "stealth"]:
+        real_ips = get_real_ip_behind_cdn(resolved_host)
+    
+    # Build nmap command selon le niveau
+    cmd = build_nmap_command(target_ip, ports_spec, scan_level)
 
-    # Build nmap command - utiliser l'IP résolue pour le scan
-    cmd = ["nmap", "-Pn", "-p", str(ports_spec), "--open", "-oX", "-", target_ip]
+    # Ajuster le timeout selon le niveau de scan
+    timeout = NMAP_TIMEOUT
+    if scan_level == "expert":
+        timeout = NMAP_TIMEOUT * 3  # 3x plus long pour expert
+    elif scan_level == "stealth":
+        timeout = NMAP_TIMEOUT * 4  # 4x plus long pour stealth
+    elif scan_level == "advanced":
+        timeout = NMAP_TIMEOUT * 2  # 2x plus long pour advanced
 
     try:
-        proc = subprocess.run(cmd, capture_output=True, timeout=NMAP_TIMEOUT)
+        proc = subprocess.run(cmd, capture_output=True, timeout=timeout)
     except subprocess.TimeoutExpired:
-        return jsonify({"error": "nmap timed out"}), 504
+        return jsonify({"error": f"nmap timed out after {timeout}s (scan level: {scan_level})"}), 504
     except FileNotFoundError:
         return jsonify({"error": "nmap not installed on server"}), 503
     except Exception as e:
@@ -219,15 +403,19 @@ def scan():
         # sometimes nmap outputs to stderr
         xml_out = proc.stderr or b""
 
-    open_ports = parse_nmap_xml(xml_out)
+    open_ports, host_info = parse_nmap_xml(xml_out)
 
     response = {
         "original_host": host,
         "resolved_host": resolved_host,
         "target_ip": target_ip,
+        "scan_level": scan_level,
         "open_ports": open_ports,
+        "host_info": host_info,
+        "real_ips_found": real_ips,
         "scanned_ports": str(ports_spec),
-        "nmap_exit_code": proc.returncode
+        "nmap_exit_code": proc.returncode,
+        "is_behind_cdn": is_cloudflare_ip(target_ip)
     }
     return jsonify(response), 200
 

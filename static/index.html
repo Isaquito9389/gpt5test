@@ -87,6 +87,17 @@
         <label>Plage de ports :</label>
         <input type="text" id="ports" placeholder="Ex: 1-1024 ou 22,80,443" value="1-1024">
 
+        <label>Niveau de scan :</label>
+        <select id="scanLevel" style="width: 100%; padding: 10px; margin-top: 5px;">
+            <option value="basic">🟢 Basique - Rapide et discret</option>
+            <option value="advanced">🟡 Avancé - Détection de services et OS</option>
+            <option value="expert">🔴 Expert - Scripts + Bypass CDN</option>
+            <option value="stealth">🟣 Furtif - Évite la détection</option>
+        </select>
+        <small style="color: #666; font-size: 12px;">
+            ⚠️ Les niveaux Expert/Furtif peuvent prendre plus de temps
+        </small>
+
         <button onclick="scan()">Lancer le scan</button>
         <button onclick="testResolve()" style="background: #17a2b8; margin-top: 10px;">Test Résolution DNS</button>
         <button onclick="testConfig()" style="background: #6c757d; margin-top: 10px;">Test Configuration</button>
@@ -97,23 +108,132 @@
 
     <script src="/static/config.js"></script>
     <script>
+        function formatScanResults(data) {
+            let output = "";
+            
+            // En-tête avec informations de résolution
+            output += "🎯 RÉSULTATS DU SCAN\n";
+            output += "═".repeat(50) + "\n\n";
+            
+            output += `📍 Hôte original: ${data.original_host}\n`;
+            output += `🌐 Hôte résolu: ${data.resolved_host}\n`;
+            output += `🎯 IP cible: ${data.target_ip}\n`;
+            output += `📊 Niveau de scan: ${data.scan_level.toUpperCase()}\n`;
+            output += `🔍 Ports scannés: ${data.scanned_ports}\n`;
+            
+            if (data.is_behind_cdn) {
+                output += `☁️ CDN détecté: Cloudflare/CDN (IP masquée)\n`;
+            }
+            
+            output += "\n";
+            
+            // Informations sur l'hôte
+            if (data.host_info && Object.keys(data.host_info).length > 0) {
+                output += "🖥️ INFORMATIONS SYSTÈME\n";
+                output += "─".repeat(30) + "\n";
+                if (data.host_info.status) {
+                    output += `Status: ${data.host_info.status}\n`;
+                }
+                if (data.host_info.os) {
+                    output += `OS détecté: ${data.host_info.os.name} (${data.host_info.os.accuracy}% confiance)\n`;
+                }
+                output += "\n";
+            }
+            
+            // IPs réelles trouvées derrière CDN
+            if (data.real_ips_found && data.real_ips_found.length > 0) {
+                output += "🕵️ IPS RÉELLES TROUVÉES (Bypass CDN)\n";
+                output += "─".repeat(40) + "\n";
+                data.real_ips_found.forEach(realIp => {
+                    output += `• ${realIp.method}: ${realIp.ip} (${realIp.host})\n`;
+                });
+                output += "\n";
+            }
+            
+            // Ports ouverts
+            if (data.open_ports && data.open_ports.length > 0) {
+                output += `🚪 PORTS OUVERTS (${data.open_ports.length} trouvés)\n`;
+                output += "─".repeat(35) + "\n";
+                
+                data.open_ports.forEach(port => {
+                    const serviceIcon = getServiceIcon(port.port);
+                    output += `${serviceIcon} Port ${port.port}/${port.protocol}\n`;
+                    
+                    if (port.service && port.service.name) {
+                        output += `   Service: ${port.service.name}`;
+                        if (port.service.product) {
+                            output += ` (${port.service.product}`;
+                            if (port.service.version) {
+                                output += ` ${port.service.version}`;
+                            }
+                            output += ")";
+                        }
+                        output += "\n";
+                        
+                        if (port.service.extrainfo) {
+                            output += `   Info: ${port.service.extrainfo}\n`;
+                        }
+                    }
+                    
+                    // Scripts NSE
+                    if (port.scripts && port.scripts.length > 0) {
+                        output += `   🔍 Scripts NSE:\n`;
+                        port.scripts.forEach(script => {
+                            output += `     • ${script.id}:\n`;
+                            const scriptOutput = script.output.split('\n').slice(0, 3).join('\n');
+                            output += `       ${scriptOutput}\n`;
+                        });
+                    }
+                    
+                    output += "\n";
+                });
+            } else {
+                output += "🚪 PORTS OUVERTS\n";
+                output += "─".repeat(20) + "\n";
+                output += "Aucun port ouvert trouvé dans la plage scannée.\n\n";
+            }
+            
+            // Informations techniques
+            output += "🔧 INFORMATIONS TECHNIQUES\n";
+            output += "─".repeat(30) + "\n";
+            output += `Code de sortie nmap: ${data.nmap_exit_code}\n`;
+            output += `Timestamp: ${new Date().toLocaleString()}\n`;
+            
+            return output;
+        }
+        
+        function getServiceIcon(port) {
+            const icons = {
+                21: "📁", 22: "🔐", 23: "💻", 25: "📧", 53: "🌐",
+                80: "🌍", 110: "📬", 143: "📮", 443: "🔒", 993: "🔐",
+                995: "🔐", 3389: "🖥️", 5432: "🗄️", 3306: "🗄️"
+            };
+            return icons[port] || "🔌";
+        }
+
         async function scan() {
             const ip = document.getElementById("ip").value.trim();
             const ports = document.getElementById("ports").value.trim();
+            const scanLevel = document.getElementById("scanLevel").value;
+            
             if (!ip) {
                 alert("Veuillez entrer un hôte ou une IP");
                 return;
             }
 
-            document.getElementById("result").textContent = "Scan en cours...";
+            const resultDiv = document.getElementById("result");
+            resultDiv.textContent = `Scan ${scanLevel} en cours...\n⏳ Cela peut prendre quelques minutes selon le niveau choisi.`;
+            
             try {
-                const requestBody = { ip: ip };
+                const requestBody = { 
+                    ip: ip,
+                    scan_level: scanLevel
+                };
                 if (ports) {
                     requestBody.ports = ports;
                 }
 
                 console.log("Sending request:", requestBody);
-                console.log("API Key length:", window.API_CONFIG.API_KEY.length);
 
                 const res = await fetch(window.API_CONFIG.API_URL, {
                     method: "POST",
@@ -130,9 +250,9 @@
                 }
 
                 const data = await res.json();
-                document.getElementById("result").textContent = JSON.stringify(data, null, 2);
+                resultDiv.textContent = formatScanResults(data);
             } catch (err) {
-                document.getElementById("result").textContent = "Erreur: " + err.message;
+                resultDiv.textContent = "Erreur: " + err.message;
                 console.error("Scan error:", err);
             }
         }
