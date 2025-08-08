@@ -85,7 +85,10 @@
         </small>
 
         <label>Plage de ports :</label>
-        <input type="text" id="ports" placeholder="Ex: 1-1024 ou 22,80,443" value="1-1024">
+        <input type="text" id="ports" placeholder="Laissez vide pour plage automatique selon le niveau">
+        <small style="color: #666; font-size: 11px;">
+            📊 Plages auto: Basique(1-1024) | Avancé(1-5000+) | Expert(1-10000+) | Furtif(ports communs)
+        </small>
 
         <label>Niveau de scan :</label>
         <select id="scanLevel" style="width: 100%; padding: 10px; margin-top: 5px;">
@@ -149,6 +152,31 @@
                 output += "─".repeat(40) + "\n";
                 data.real_ips_found.forEach(realIp => {
                     output += `• ${realIp.method}: ${realIp.ip} (${realIp.host})\n`;
+                });
+                output += "\n";
+            }
+            
+            // Résultats des scans sur les vraies IPs
+            if (data.real_ip_scan_results && data.real_ip_scan_results.length > 0) {
+                output += "🎯 SCAN DES VRAIES IPS (Bypass CDN)\n";
+                output += "─".repeat(40) + "\n";
+                data.real_ip_scan_results.forEach(result => {
+                    output += `\n🖥️ ${result.ip} (${result.method} - ${result.host})\n`;
+                    if (result.ports && result.ports.length > 0) {
+                        result.ports.forEach(port => {
+                            const serviceIcon = getServiceIcon(port.port);
+                            output += `  ${serviceIcon} Port ${port.port}/${port.protocol}`;
+                            if (port.service && port.service.name) {
+                                output += ` - ${port.service.name}`;
+                                if (port.service.product) {
+                                    output += ` (${port.service.product})`;
+                                }
+                            }
+                            output += "\n";
+                        });
+                    } else {
+                        output += "  Aucun port ouvert détecté\n";
+                    }
                 });
                 output += "\n";
             }
